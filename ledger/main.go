@@ -57,8 +57,26 @@ func main() {
 		}
 	}
 
-	// 4. Сценарии добавления транзакций.
-	section("4. Добавление транзакций")
+	// 4. Полиморфизм: CheckValid принимает любой Validatable — и транзакцию, и бюджет.
+	section("4. Проверка через интерфейс Validatable (CheckValid)")
+	objects := []ledger.Validatable{
+		tx(1250.50, "Еда", "Корректная транзакция", "2026-11-02"),
+		ledger.Transaction{Amount: -300, Category: "", Description: "Всё неправильно"},
+		ledger.Budget{Category: "Еда", Limit: 5000},
+		ledger.Budget{Category: "Подписки", Limit: 0},
+		&ledger.Budget{Category: "   ", Limit: -10},
+	}
+	for _, obj := range objects {
+		// Validate ничего не логирует, ошибку выводит вызывающий код.
+		if err := ledger.CheckValid(obj); err != nil {
+			fmt.Printf("✗ %-20T %v\n", obj, err)
+		} else {
+			fmt.Printf("✓ %-20T корректно\n", obj)
+		}
+	}
+
+	// 5. Сценарии добавления транзакций (Validate вызывается внутри AddTransaction).
+	section("5. Добавление транзакций")
 	scenarios := []struct {
 		tx      ledger.Transaction
 		wantErr error // nil — ожидается успех
@@ -71,7 +89,9 @@ func main() {
 		{tx(1800, "Транспорт", "Проездной (превышение бюджета)", "2026-11-05"), ledger.ErrBudgetExceeded},
 		{tx(4990, "Образование", "Подписка на курс по Go", "2026-11-10"), nil},
 		{tx(10000, "Подарки", "Категория без бюджета", "2026-11-15"), nil},
-		{tx(0, "Прочее", "Нулевая сумма", "2026-11-16"), ledger.ErrZeroAmount},
+		{tx(0, "Прочее", "Нулевая сумма", "2026-11-16"), ledger.ErrInvalidAmount},
+		{tx(-200, "Еда", "Отрицательная сумма", "2026-11-16"), ledger.ErrInvalidAmount},
+		{tx(150, "  ", "Пустая категория", "2026-11-16"), ledger.ErrEmptyCategory},
 	}
 
 	accepted := 0
@@ -81,8 +101,8 @@ func main() {
 		}
 	}
 
-	// 5. Увеличиваем лимит через SetBudget и повторяем отклонённую транзакцию.
-	section("5. Обновление бюджета и повторная попытка")
+	// 6. Увеличиваем лимит через SetBudget и повторяем отклонённую транзакцию.
+	section("6. Обновление бюджета и повторная попытка")
 	if err := ledger.SetBudget(ledger.Budget{Category: "Транспорт", Limit: 2500}); err != nil {
 		log.Fatalf("не удалось обновить бюджет: %v", err)
 	}
@@ -91,8 +111,8 @@ func main() {
 		accepted++
 	}
 
-	// 6. Итог.
-	section("6. Сохранённые транзакции")
+	// 7. Итог.
+	section("7. Сохранённые транзакции")
 	list := ledger.ListTransactions()
 	fmt.Printf("%-4s %-12s %-12s %10s  %s\n", "ID", "Дата", "Категория", "Сумма", "Описание")
 	for _, t := range list {
@@ -100,7 +120,7 @@ func main() {
 			t.ID, t.Date.Format("2006-01-02"), t.Category, t.Amount, t.Description)
 	}
 
-	section("7. Исполнение бюджетов")
+	section("8. Исполнение бюджетов")
 	printBudgets()
 
 	fmt.Println()

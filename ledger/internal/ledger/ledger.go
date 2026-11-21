@@ -1,60 +1,60 @@
-// Package ledger содержит бизнес-логику учёта транзакций
-// и хранилище транзакций в памяти.
+// Package ledger содержит бизнес-логику учёта транзакций и бюджетов.
+//
+// Файлы пакета:
+//   - validation.go  — интерфейс Validatable, CheckValid, ошибки валидации;
+//   - transaction.go — модель Transaction и её Validate;
+//   - budget.go      — модель Budget и её Validate;
+//   - ledger.go      — хранилище в памяти и бизнес-операции (этот файл);
+//   - loader.go      — загрузка бюджетов из JSON.
 package ledger
 
 import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Transaction — финансовая транзакция.
-type Transaction struct {
-	ID          int       // уникальный идентификатор (автоинкремент)
-	Amount      float64   // сумма
-	Category    string    // категория траты
-	Description string    // описание
-	Date        time.Time // дата транзакции
-}
+// ErrBudgetExceeded — транзакция нарушает бюджет категории.
+var ErrBudgetExceeded = errors.New("budget exceeded")
 
-// Ошибки валидации.
-var (
-	ErrZeroAmount    = errors.New("сумма транзакции не может быть равна 0")
-	ErrEmptyCategory = errors.New("категория транзакции не может быть пустой")
-)
-
-// Хранилище транзакций в памяти. Инициализируется пустым срезом при запуске.
+// Хранилище в памяти. Транзакции и бюджеты защищены одним мьютексом,
+// чтобы проверка бюджета и добавление транзакции выполнялись атомарно.
 var (
 	mu           sync.RWMutex
 	transactions = make([]Transaction, 0)
+	budgets      = make(map[string]Budget) // ключ — categoryKey(Category)
 )
 
-// AddTransaction проверяет транзакцию и добавляет её в хранилище.
+// categoryKey приводит название категории к единому виду,
+// чтобы «Еда», «еда» и « еда » считались одной категорией.
+func categoryKey(category string) string {
+	return strings.ToLower(strings.TrimSpace(category))
+}
+
+// AddTransaction валидирует транзакцию, проверяет бюджет и добавляет её в хранилище.
 // ID назначается автоматически (len(transactions)+1).
 // Если дата не указана, подставляется текущее время.
 //
-// Если для категории задан бюджет, сумма уже сохранённых транзакций этой
-// категории вместе с новой не должна превышать лимит. Иначе возвращается
-// ошибка, которая оборачивает ErrBudgetExceeded, и транзакция не сохраняется.
+// Возвращает *ValidationError, если данные некорректны, или ошибку,
+// оборачивающую ErrBudgetExceeded, если транзакция превышает бюджет категории.
+// В обоих случаях транзакция не сохраняется.
 func AddTransaction(tx Transaction) error {
-	if tx.Amount == 0 {
-		return ErrZeroAmount
-	}
-	if strings.TrimSpace(tx.Category) == "" {
-		return ErrEmptyCategory
-	}
 	if tx.Date.IsZero() {
 		tx.Date = time.Now()
+	}
+	// Проверка данных отделена от бизнес-логики: модель проверяет себя сама.
+	if err := tx.Validate(); err != nil {
+		return err
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Проверка бюджета и добавление выполняются под одной блокировкой,
-	// чтобы две параллельные транзакции не превысили лимит вместе.
+	// Бизнес-правило: сумма по категории не должна превышать бюджет.
 	if b, ok := budgets[categoryKey(tx.Category)]; ok {
 		spent := spentLocked(tx.Category)
 		if exceedsLimit(spent+tx.Amount, b.Limit) {
@@ -84,6 +84,42 @@ func SpentByCategory(category string) float64 {
 	mu.RLock()
 	defer mu.RUnlock()
 	return spentLocked(category)
+}
+
+// SetBudget валидирует бюджет, затем добавляет его или обновляет лимит существующего.
+func SetBudget(b Budget) error {
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	b.Category = strings.TrimSpace(b.Category)
+
+	mu.Lock()
+	defer mu.Unlock()
+	budgets[categoryKey(b.Category)] = b
+	return nil
+}
+
+// GetBudget возвращает бюджет категории и признак его наличия.
+func GetBudget(category string) (Budget, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	b, ok := budgets[categoryKey(category)]
+	return b, ok
+}
+
+// ListBudgets возвращает все бюджеты, отсортированные по категории.
+func ListBudgets() []Budget {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	result := make([]Budget, 0, len(budgets))
+	for _, b := range budgets {
+		result = append(result, b)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return categoryKey(result[i].Category) < categoryKey(result[j].Category)
+	})
+	return result
 }
 
 // exceedsLimit сравнивает суммы с точностью до копеек. Так погрешность float64

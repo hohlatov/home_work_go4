@@ -39,8 +39,11 @@ func TestAddTransaction(t *testing.T) {
 func TestAddTransactionValidation(t *testing.T) {
 	reset()
 
-	if err := AddTransaction(Transaction{Amount: 0, Category: "Еда"}); !errors.Is(err, ErrZeroAmount) {
-		t.Errorf("ожидалась ErrZeroAmount, получено %v", err)
+	if err := AddTransaction(Transaction{Amount: 0, Category: "Еда"}); !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("ожидалась ErrInvalidAmount, получено %v", err)
+	}
+	if err := AddTransaction(Transaction{Amount: -50, Category: "Еда"}); !errors.Is(err, ErrInvalidAmount) {
+		t.Errorf("отрицательная сумма: ожидалась ErrInvalidAmount, получено %v", err)
 	}
 	if err := AddTransaction(Transaction{Amount: 10, Category: "  "}); !errors.Is(err, ErrEmptyCategory) {
 		t.Errorf("ожидалась ErrEmptyCategory, получено %v", err)
